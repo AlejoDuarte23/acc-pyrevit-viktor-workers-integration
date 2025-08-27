@@ -1,0 +1,6 @@
+app_type = "editor"
+python_version = "3.13"
+registered_name = "revit-viktor-structural-worker"
+oauth2_integrations = [
+  "aps-integration-viktor"
+]

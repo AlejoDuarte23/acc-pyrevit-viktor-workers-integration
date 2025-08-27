@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>APS Viewer</title>
+  <link rel="stylesheet"
+        href="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/style.min.css"
+        type="text/css">
+  <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.min.js"></script>
+  <style>
+    html, body, #apsViewerDiv { width: 100%; height: 100%; margin: 0; }
+    #status {
+      position: absolute; top: 10px; left: 10px; z-index: 10;
+      background: rgba(0,0,0,0.7); color: #fff; padding: 6px 10px; border-radius: 6px;
+      font: 12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      max-width: 70%;
+      white-space: pre-line;
+    }
+  </style>
+</head>
+<body>
+  <div id="apsViewerDiv"></div>
+
+  <script>
+
+    var ACCESS_TOKEN = 'APS_TOKEN_PLACEHOLDER';
+    var DOCUMENT_URN = 'urn:URN_PLACEHOLDER';
+    var TARGET_GUID  = 'VIEW_GUID_PLACEHOLDER';
+
+
+  const statusEl = document.getElementById('status');
+  function setStatus(_msg) { /* no-op (silenced}
+  function appendStatus(_msg) { /* no-op (silenced) */ }
+  function logObj(_label, _obj) { /* no-op (silenced) */ }
+    function describeNode(node) {
+      if (!node) return null;
+      let type = null, role = null;
+      try { type = node.getType ? node.getType() : null; } catch (_) {}
+      try {
+        if (typeof node.is3D === 'function' && node.is3D()) role = '3d';
+        if (typeof node.is2D === 'function' && node.is2D()) role = role ? role + '+2d' : '2d';
+      } catch (_) {}
+      try { if (!role && node.data && node.data.role) role = node.data.role; } catch (_) {}
+      return {
+        name: node.name || null,
+        guid: node.guid || null,
+        type: type,
+        role: role
+      };
+    }
+    function isResource(node) {
+      try { return node && node.getType && node.getType() === 'resource'; } catch (_) { return false; }
+    }
+    function isViewOrGeom(node) {
+        try {
+            if (node && ((node.is3D && node.is3D()) || (node.is2D && node.is2D()))) {
+                return true;
+            }
+            if (node && node.data && (node.data.role === '3d' || node.data.role === '2d' || node.data.role === 'graphics')) {
+                return true;
+            }
+            return false;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    // Avoid Mixpanel/localStorage in sandboxed iframes
+  try { Autodesk.Viewing.Private.analytics.optOut(); } catch (e) { /* silent */ }
+
+    const initT0 = performance.now();
+    
+    Autodesk.Viewing.Initializer(
+      { 
+        env: 'AutodeskProduction2', 
+        api: 'streamingV2', 
+        accessToken: ACCESS_TOKEN 
+      },
+      function () {
+        // silenced
+        const t0 = performance.now();
+        Autodesk.Viewing.Document.load(
+          DOCUMENT_URN,
+          function onSuccess(doc) {
+            const t1 = performance.now();
+
+            try {
+              const container = document.getElementById('apsViewerDiv');
+              const viewer = new Autodesk.Viewing.GuiViewer3D(container);
+              viewer.start();
+              const root = doc.getRoot();
+
+              // Resolve target node
+              let node = null;
+              if (TARGET_GUID) {
+                node = root.findByGuid(TARGET_GUID);
+              }
+
+              if (!node) {
+                const defNode = root.getDefaultGeometry();
+                if (!defNode) {
+                  return;
+                }
+                loadByNode(viewer, doc, defNode);
+                return;
+              }
+
+              loadByNode(viewer, doc, node);
+            } catch (err) {
+            }
+          },
+          function onFailure(code, message) {
+            const t1 = performance.now();
+          }
+        );
+      }
+    );
+
+    function loadByNode(viewer, doc, node) {
+      // silenced
+
+      if (isViewOrGeom(node)) {
+        const t0 = performance.now();
+        viewer.loadDocumentNode(doc, node, { keepCurrentModels: false })
+          .then(() => {
+            const t1 = performance.now();
+          })
+          .catch((e) => {
+          });
+        return;
+      }
+
+      if (isResource(node)) {
+        const path = doc.getViewablePath(node);
+        if (path) {
+          const t0 = performance.now();
+          viewer.loadModel(path, {},
+            () => {
+              const t1 = performance.now();
+            },
+            (e) => {
+            }
+          );
+          return;
+        }
+      }
+    }
+
+    const initT1 = performance.now();
+  </script>
+</body>
+</html>
