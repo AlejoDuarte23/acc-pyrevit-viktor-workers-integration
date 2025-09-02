@@ -1,7 +1,9 @@
 import viktor as vkt
 import requests
 import base64
+import json
 import app.aps_helpers as aps_helpers
+from io import BytesIO
 from app.plots import model_viz
 from app.conver_revit_model import (
     pull_revit_file_from_acc,
@@ -24,6 +26,8 @@ from app.update_revit_model import (
     persist_updated_model,
 )
 from pathlib import Path
+from viktor.core import File
+from viktor.external.python import PythonAnalysis
 
 class APSView(vkt.WebView):
     pass
@@ -146,7 +150,7 @@ class Parametrization(vkt.Parametrization):
     step3.sections = vkt.OptionField("Select Cross Sections", options=["UB406x178x60", "UB254x102x28", "Original Sections"], default="Original Sections")
     step3.br33 = vkt.LineBreak()
     step3.buttom = vkt.DownloadButton("Update Revit Model", method="update_revit_model")
-
+    step3.staad_buttom = vkt.DownloadButton("Create STAAD Model", method="run_staad_model")
 
 class Controller(vkt.Controller):
     parametrization = Parametrization(width=40)
@@ -331,3 +335,80 @@ class Controller(vkt.Controller):
         except Exception as e:
             print(f"update_revit_model: completed with collected errors: {e}")
         return vkt.DownloadResult(updated_bytes, file_name="updated_revit_model.rvt")
+    
+
+    def run_staad_model(self, params, **kwargs) -> vkt.DownloadResult | None:
+        script_path = Path(__file__).parent / "run_staad_model.py"
+        input_json_path = Path(__file__).parent / "downloaded_files" / "output.json"
+
+        if not script_path.exists():
+            raise FileNotFoundError("Worker script revit_worker.py missing")
+        
+        if not input_json_path.exists():
+            raise FileNotFoundError("output.json missing")
+        
+        with open(input_json_path, encoding="utf-8") as jsonfile:
+            input_data = json.load(jsonfile)
+
+        # Build context for step-decorated parse function
+        ctx = StepErrors()
+        parsed = parse_revit_model(output_json=input_data, _ctx=ctx)
+        if parsed is None:
+            ctx.reraise()
+            return None
+        nodes, lines, cross_sections, members = parsed
+
+        # Decide section name: user selection if not 'Original', else first cross section name or fallback
+        selection = getattr(getattr(params, "step3", object()), "sections", None)
+        if selection and selection != "Original Sections":
+            section_name = selection
+        else:
+            try:
+                first_cs = next(iter(cross_sections.values()))
+                section_name = first_cs["name"]
+            except Exception:
+                section_name = "IPE400"  # conservative fallback
+
+        staad_input = json.dumps([nodes, lines, section_name])
+        script = File.from_path(script_path)
+
+        model_files = [("STAAD_inputs.json", BytesIO(staad_input.encode("utf-8")))]
+
+        analysis = PythonAnalysis(script=script, files=model_files, output_filenames=["STAAD_output.json"])  # type: ignore[arg-type]
+        analysis.execute(timeout=300)
+
+        output_file_obj = analysis.get_output_file("STAAD_output.json")
+        if output_file_obj is None:
+            raise RuntimeError("STAAD worker did not produce STAAD_output.json")
+
+        # Extract bytes from output file object
+        contents = None
+        for attempt in ("getvalue", "get_bytes", "read", "read_bytes"):
+            func = getattr(output_file_obj, attempt, None)
+            if callable(func):
+                try:
+                    contents = func()
+                except TypeError:
+                    try:
+                        contents = func(binary=True)
+                    except Exception:
+                        try:
+                            contents = func(as_bytes=True)
+                        except Exception:  # noqa: BLE001
+                            continue
+                except Exception:  # noqa: BLE001
+                    continue
+            if contents is not None:
+                break
+        if isinstance(contents, str):
+            contents_bytes = contents.encode("utf-8")
+        elif isinstance(contents, (bytes, bytearray)):
+            contents_bytes = bytes(contents)
+        else:
+            raise RuntimeError("Unable to read STAAD_output.json content")
+
+        try:
+            ctx.reraise()
+        except Exception as e:  # noqa: BLE001
+            print(f"run_staad_model: completed with collected errors: {e}")
+        return vkt.DownloadResult(contents_bytes, file_name="STAAD_output.json")
