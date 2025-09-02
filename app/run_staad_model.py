@@ -45,7 +45,8 @@ def run_staad():
     material_name = "STEEL"
     staad_property.SetMaterialName(material_name)
 
-    country_code = 7  # European database.
+    # country_code = 7  # European database.
+    country_code = 3  # UK database.
     # section_name = "IPE400"  # Selected profile.
     type_spec = 0  # ST (Single Section from Table).
     add_spec_1 = 0.0  # Not used for single sections
@@ -69,10 +70,10 @@ def run_staad():
         Ni_cords = nodes[Ni_id]
         Nj_cords = nodes[Nj_id]
         if Ni_id not in create_nodes:
-            geometry.CreateNode(int(Ni_id), Ni_cords["x"], Ni_cords["y"], Ni_cords["z"])
+            geometry.CreateNode(int(Ni_id), Ni_cords["x"], Ni_cords["z"], Ni_cords["y"])
             create_nodes.add(Ni_id)
         if Nj_id not in create_nodes:
-            geometry.CreateNode(int(Nj_id), Nj_cords["x"], Nj_cords["y"], Nj_cords["z"])
+            geometry.CreateNode(int(Nj_id), Nj_cords["x"], Nj_cords["z"], Nj_cords["y"])
             create_nodes.add(Nj_id)
         geometry.CreateBeam(int(line_id), Ni_id, Nj_id)
         _ = staad_property.AssignBeamProperty(int(line_id), property_no)
@@ -83,7 +84,7 @@ def run_staad():
     support._FlagAsMethod("AssignSupportToNode")
 
     varnSupportNo  = support.CreateSupportFixed()
-    nodes_with_support = [1,2,5,6]
+    nodes_with_support = [431746, 431742, 431740, 431744]
     for node in nodes_with_support:
         _  =  support.AssignSupportToNode(node,varnSupportNo)
     

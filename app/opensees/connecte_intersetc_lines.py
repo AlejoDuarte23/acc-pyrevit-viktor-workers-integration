@@ -3,10 +3,17 @@ from __future__ import annotations
 from math import isfinite
 from typing import Annotated
 
-from app.types import NodesDict, LinesDict, MembersDict, MemberInfo
+from app.types import (
+    NodesDict,
+    LinesDict,
+    MembersDict,
+    MemberInfo,
+    MotherToChildrenMap,
+    ChildToMotherMap,
+)
 
-# Atomic helpers (no underscores per style guide)
 
+# Atomic helpers
 def almostEqual(a: float, b: float, tol: float) -> bool:
     return abs(a - b) <= tol
 
@@ -18,9 +25,6 @@ def segmentIntersectionXY(
     q2: tuple[float, float],
     tol: float = 1e-8,
 ) -> tuple[float, float, float, float] | None:
-    """Return (x, y, t, u) for intersection of segments p1-p2 and q1-q2 or None.
-    End point touching counts; robust to near parallel using tolerance.
-    """
     x1, y1 = p1
     x2, y2 = p2
     x3, y3 = q1
@@ -60,40 +64,38 @@ def findExistingNode(
     return None
 
 
-def connectLinesAtIntersections(
-    nodes: NodesDict,
-    lines: LinesDict,
-    members: MembersDict,
-    *,
-    tol: Annotated[float, "tolerance for geometric comparisons"] = 1e-6,
-) -> tuple[
-    NodesDict,
-    LinesDict,
-    MembersDict,
-    dict[int, list[int]],  # mother_to_children
-    dict[int, int],        # child_to_mother
-]:
-    """Insert nodes at crossings and split lines; propagate member data to children.
+def cloneNodes(nodes: NodesDict) -> NodesDict:
+    return {k: {"id": v["id"], "x": v["x"], "y": v["y"], "z": v["z"]} for k, v in nodes.items()}
 
-    Returns new data structures plus mapping dictionaries.
-    """
-    new_nodes: NodesDict = {k: dict(v) for k, v in nodes.items()}
-    new_lines: LinesDict = {k: dict(v) for k, v in lines.items()}
-    new_members: MembersDict = {k: dict(v) for k, v in members.items()}
 
-    mother_to_children: dict[int, list[int]] = {lid: [] for lid in new_lines}
-    child_to_mother: dict[int, int] = {}
+def cloneLines(lines: LinesDict) -> LinesDict:
+    return {k: {"id": v["id"], "Ni": v["Ni"], "Nj": v["Nj"]} for k, v in lines.items()}
 
-    next_node_id = max(new_nodes) + 1 if new_nodes else 1
-    next_line_id = max(new_lines) + 1 if new_lines else 1
 
-    splits_by_line: dict[int, list[tuple[float, int]]] = {
-        lid: [(0.0, new_lines[lid]["Ni"]), (1.0, new_lines[lid]["Nj"])] for lid in new_lines
+def cloneMembers(members: MembersDict) -> MembersDict:
+    return {
+        k: {
+            "line_id": v["line_id"],
+            "cross_section_id": v["cross_section_id"],
+            "material_name": v["material_name"],
+        }
+        for k, v in members.items()
     }
 
+
+def initSplitParams(new_lines: LinesDict) -> dict[int, list[tuple[float, int]]]:
+    return {lid: [(0.0, info["Ni"]), (1.0, info["Nj"])] for lid, info in new_lines.items()}
+
+
+def collectIntersections(
+    new_nodes: NodesDict,
+    new_lines: LinesDict,
+    splits_by_line: dict[int, list[tuple[float, int]]],
+    tol: float,
+    next_node_id: int,
+) -> int:
     line_ids = list(new_lines.keys())
     n_lines = len(line_ids)
-
     for i in range(n_lines):
         lid_i = line_ids[i]
         li = new_lines[lid_i]
@@ -126,7 +128,17 @@ def connectLinesAtIntersections(
                 nid = existing
             splits_by_line[lid_i].append((ti, nid))
             splits_by_line[lid_j].append((uj, nid))
+    return next_node_id
 
+
+def buildChildren(
+    new_lines: LinesDict,
+    new_members: MembersDict,
+    splits_by_line: dict[int, list[tuple[float, int]]],
+    next_line_id: int,
+) -> tuple[LinesDict, MembersDict, MotherToChildrenMap, ChildToMotherMap, int]:
+    mother_to_children: MotherToChildrenMap = {lid: [] for lid in new_lines}  # type: ignore[assignment]
+    child_to_mother: ChildToMotherMap = {}  # type: ignore[assignment]
     mothers_to_remove: list[int] = []
     for lid, param_nodes in splits_by_line.items():
         param_nodes = sorted(param_nodes, key=lambda tn: tn[0])
@@ -164,21 +176,46 @@ def connectLinesAtIntersections(
     for lid in mothers_to_remove:
         if lid in new_lines:
             del new_lines[lid]
-    for lid in list(lines.keys()):
+    return new_lines, new_members, mother_to_children, child_to_mother, next_line_id
+
+
+def finalizeMappings(
+    original_lines: LinesDict,
+    new_lines: LinesDict,
+    mother_to_children: MotherToChildrenMap,
+    child_to_mother: ChildToMotherMap,
+) -> None:
+    for lid in list(original_lines.keys()):
         if lid not in mother_to_children:
-            mother_to_children[lid] = []
+            mother_to_children[lid] = []  # type: ignore[index]
         if not mother_to_children[lid] and lid in new_lines:
-            mother_to_children[lid] = [lid]
-            child_to_mother[lid] = lid
+            mother_to_children[lid] = [lid]  # type: ignore[index]
+            child_to_mother[lid] = lid  # type: ignore[index]
+
+
+def connect_lines_at_intersections(
+    nodes: NodesDict,
+    lines: LinesDict,
+    members: MembersDict,
+    *,
+    tol: Annotated[float, "tolerance for geometric comparisons"] = 1e-6,
+) -> tuple[
+    NodesDict,
+    LinesDict,
+    MembersDict,
+    MotherToChildrenMap,
+    ChildToMotherMap,
+]:
+    new_nodes = cloneNodes(nodes)
+    new_lines = cloneLines(lines)
+    new_members = cloneMembers(members)
+    splits_by_line = initSplitParams(new_lines)
+    next_node_id = max(new_nodes) + 1 if new_nodes else 1
+    next_line_id = max(new_lines) + 1 if new_lines else 1
+    next_node_id = collectIntersections(new_nodes, new_lines, splits_by_line, tol, next_node_id)
+    new_lines, new_members, mother_to_children, child_to_mother, next_line_id = buildChildren(
+        new_lines, new_members, splits_by_line, next_line_id
+    )
+    finalizeMappings(lines, new_lines, mother_to_children, child_to_mother)
+    print(f"[DEBUG] {child_to_mother=}, {mother_to_children=}")
     return new_nodes, new_lines, new_members, mother_to_children, child_to_mother
-
-# Backwards-compatible alias requested by existing code
-connect_lines_at_intersections = connectLinesAtIntersections
-
-__all__ = [
-    "almostEqual",
-    "segmentIntersectionXY",
-    "findExistingNode",
-    "connectLinesAtIntersections",
-    "connect_lines_at_intersections",
-]

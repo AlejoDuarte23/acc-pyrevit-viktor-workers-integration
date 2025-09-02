@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 from math import sqrt
 from app.types import NodesDict, LinesDict, Vec3
-from app.opensees.connecte_intersetc_lines import connectLinesAtIntersections as connect_lines_at_intersections
 
 # Vector helpers
 def v_sub(a: Vec3, b: Vec3) -> Vec3:
@@ -102,8 +101,10 @@ def plot_model(nodes: NodesDict, lines: LinesDict) -> None:
 
 if __name__ == "__main__":
     import json
-    from app.conver_revit_model import parse_revit_model
     from app.steps import StepErrors
+    from app.opensees.connecte_intersetc_lines import connect_lines_at_intersections
+    from app.conver_revit_model import parse_revit_model
+
     input_json_path = r"C:\Users\aleja\viktor-apps\revit-viktor-structural-worker\app\downloaded_files\output.json"
     with open(input_json_path, encoding="utf-8") as jsonfile:
         input_data = json.load(jsonfile)

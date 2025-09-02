@@ -44,6 +44,22 @@ CrossSectionsDict = dict[int, CrossSectionInfo]
 MembersDict = dict[int, MemberInfo]
 MassDict = dict[int, NodeMass]
 
+# Relationship mappings (annotate key and value semantics)
+MotherToChildrenMap = Annotated[
+    dict[
+        Annotated[int, "mother line id"],
+        list[Annotated[int, "child line id"]],
+    ],
+    "mother id -> ordered list of its child line ids after splitting",
+]
+ChildToMotherMap = Annotated[
+    dict[
+        Annotated[int, "child line id"],
+        Annotated[int, "origin mother line id"],
+    ],
+    "child line id -> original mother line id",
+]
+
 Vec3 = tuple[float, float, float]
 
 

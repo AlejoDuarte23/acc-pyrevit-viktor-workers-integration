@@ -25,6 +25,7 @@ from app.update_revit_model import (
     run_update_worker,
     persist_updated_model,
 )
+from app.opensees.connecte_intersetc_lines import connect_lines_at_intersections
 from pathlib import Path
 from viktor.core import File
 from viktor.external.python import PythonAnalysis
@@ -358,6 +359,9 @@ class Controller(vkt.Controller):
             return None
         nodes, lines, cross_sections, members = parsed
 
+        nodes2, lines2, members2, mother_to_children, child_to_mother = connect_lines_at_intersections(
+        nodes, lines, members, tol=1e-6
+        )
         # Decide section name: user selection if not 'Original', else first cross section name or fallback
         selection = getattr(getattr(params, "step3", object()), "sections", None)
         if selection and selection != "Original Sections":
@@ -369,7 +373,7 @@ class Controller(vkt.Controller):
             except Exception:
                 section_name = "IPE400"  # conservative fallback
 
-        staad_input = json.dumps([nodes, lines, section_name])
+        staad_input = json.dumps([nodes2, lines2, "UB406x178x60"])
         script = File.from_path(script_path)
 
         model_files = [("STAAD_inputs.json", BytesIO(staad_input.encode("utf-8")))]
