@@ -291,6 +291,7 @@ class Controller(vkt.Controller):
         return vkt.PlotlyResult(figure=fig)
 
     def update_revit_model(self, params, **kwargs):
+        """This looks for input.json in the downloaded_files folder"""
         base_dir = Path(__file__).parent / "downloaded_files"
         ctx = StepErrors()
 
@@ -373,7 +374,15 @@ class Controller(vkt.Controller):
             except Exception:
                 section_name = "IPE400"  # conservative fallback
 
-        staad_input = json.dumps([nodes2, lines2, "UB406x178x60"])
+        staad_input = json.dumps([nodes2, lines2, "UB406x178x60", members2, cross_sections])
+        # Persist STAAD input locally for inspection/debugging before sending to worker
+        dl_dir = Path(__file__).parent / "downloaded_files"
+        dl_dir.mkdir(exist_ok=True)
+        staad_input_path = dl_dir / "STAAD_inputs.json"
+        try:
+            staad_input_path.write_text(staad_input, encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            print(f"Failed to write STAAD_inputs.json locally: {e}")
         script = File.from_path(script_path)
 
         model_files = [("STAAD_inputs.json", BytesIO(staad_input.encode("utf-8")))]
@@ -385,34 +394,6 @@ class Controller(vkt.Controller):
         if output_file_obj is None:
             raise RuntimeError("STAAD worker did not produce STAAD_output.json")
 
-        # Extract bytes from output file object
-        contents = None
-        for attempt in ("getvalue", "get_bytes", "read", "read_bytes"):
-            func = getattr(output_file_obj, attempt, None)
-            if callable(func):
-                try:
-                    contents = func()
-                except TypeError:
-                    try:
-                        contents = func(binary=True)
-                    except Exception:
-                        try:
-                            contents = func(as_bytes=True)
-                        except Exception:  # noqa: BLE001
-                            continue
-                except Exception:  # noqa: BLE001
-                    continue
-            if contents is not None:
-                break
-        if isinstance(contents, str):
-            contents_bytes = contents.encode("utf-8")
-        elif isinstance(contents, (bytes, bytearray)):
-            contents_bytes = bytes(contents)
-        else:
-            raise RuntimeError("Unable to read STAAD_output.json content")
-
-        try:
-            ctx.reraise()
-        except Exception as e:  # noqa: BLE001
-            print(f"run_staad_model: completed with collected errors: {e}")
-        return vkt.DownloadResult(contents_bytes, file_name="STAAD_output.json")
+        contents = json.loads(output_file_obj.getvalue()) 
+        print(f"{contents=}")
+        return None
