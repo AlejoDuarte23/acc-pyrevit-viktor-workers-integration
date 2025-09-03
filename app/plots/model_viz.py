@@ -214,27 +214,24 @@ def plot_3d_model(
         cs_name = name_by_cs_id.get(member["cross_section_id"], "Section")
         add_beam_mesh(fig, verts, color_map_by_name[cs_name])
 
-    nodes_with_load = list(
-        {node for ln in lines.values() if ln.get("Type") == "Joist" for node in (ln["Ni"], ln["Nj"])}
-    )
-    if nodes_with_load:
-        arrow_height, offset = 400.0, 300.0
-        cyl_h, cone_h = 0.8 * arrow_height, 0.2 * arrow_height
-        cyl_radius, cone_radius = 0.04 * arrow_height, 0.15 * arrow_height
-        for nid in nodes_with_load:
-            n = nodes[nid]
-            base = np.array([n["x"], n["y"], n["z"]], float) + np.array([0.0, 0.0, arrow_height + offset])
-            cyl_verts, ci, cj, ck = compute_cylinder_mesh(base, cyl_h, cyl_radius)
-            fig.add_trace(go.Mesh3d(
-                x=cyl_verts[:, 0], y=cyl_verts[:, 1], z=cyl_verts[:, 2],
-                i=ci, j=cj, k=ck, color="red", opacity=1.0, hoverinfo="skip", showlegend=False
-            ))
-            cone_base = base + np.array([0.0, 0.0, -cyl_h])
-            cone_verts, qi, qj, qk = compute_cone_mesh(cone_base, cone_h, cone_radius)
-            fig.add_trace(go.Mesh3d(
-                x=cone_verts[:, 0], y=cone_verts[:, 1], z=cone_verts[:, 2],
-                i=qi, j=qj, k=qk, color="red", opacity=1.0, hoverinfo="skip", showlegend=False
-            ))
+    arrow_height, offset = 0.50, 0.30
+    cyl_h, cone_h = 0.8 * arrow_height, 0.2 * arrow_height
+    cyl_radius, cone_radius = 0.04 * arrow_height, 0.15 * arrow_height
+    for node in nodes.values():
+        if node["z"] == 0:
+            continue
+        base = np.array([node["x"], node["y"], node["z"]], float) + np.array([0.0, 0.0, arrow_height + offset])
+        cyl_verts, ci, cj, ck = compute_cylinder_mesh(base, cyl_h, cyl_radius)
+        fig.add_trace(go.Mesh3d(
+            x=cyl_verts[:, 0], y=cyl_verts[:, 1], z=cyl_verts[:, 2],
+            i=ci, j=cj, k=ck, color="red", opacity=1.0, hoverinfo="skip", showlegend=False
+        ))
+        cone_base = base + np.array([0.0, 0.0, -cyl_h])
+        cone_verts, qi, qj, qk = compute_cone_mesh(cone_base, cone_h, cone_radius)
+        fig.add_trace(go.Mesh3d(
+            x=cone_verts[:, 0], y=cone_verts[:, 1], z=cone_verts[:, 2],
+            i=qi, j=qj, k=qk, color="red", opacity=1.0, hoverinfo="skip", showlegend=False
+        ))
 
     for nm in legend_names:
         fig.add_trace(
