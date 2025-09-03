@@ -138,7 +138,7 @@ def parse_revit_model(output_json: dict) -> Tuple[dict, dict, dict, dict]:
         raise ValueError("No members found in analysis output")
 
     try:
-        from app.types import (
+        from app.app_types import (
             NodeInfo,
             LineInfo,
             CrossSectionInfo,
