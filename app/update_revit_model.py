@@ -12,9 +12,9 @@ from app.steps import step
 
 @step("ensure_input_json")
 def ensure_input_json(base_dir: Path) -> Path:
-    path = base_dir / "input.json"
+    path = base_dir / "input_staad_updated.json"
     if not path.exists():
-        raise FileNotFoundError("input.json not found. Visit 'Modify / Visualize Sections' first.")
+        raise FileNotFoundError("input_staad_updated.json not found. Visit 'Modify / Visualize Sections' first.")
     return path
 
 

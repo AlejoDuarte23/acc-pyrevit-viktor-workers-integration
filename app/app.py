@@ -180,10 +180,20 @@ class Parametrization(vkt.Parametrization):
         "Allowable Deformation [mm]", default=10
     )
     step3.br66 = vkt.LineBreak()
+    step3.text3 = vkt.Text(
+        textwrap.dedent(
+            """
+            ## Run STAAD
+            Create a STAAD.Pro model using the loads and run a serviceability assessment to optimize the model to comply with the allowable displacements
+            """
+        )
+    )
     step3.staad_buttom = vkt.ActionButton(
         "Create STAAD Model", method="run_staad_model"
     )
-    step3.text3 = vkt.Text(
+    step3.br77 = vkt.LineBreak()
+    step3.boolean = vkt.BooleanField("Toggle to Update Result!")
+    step3.text4= vkt.Text(
         textwrap.dedent(
             """
             ## Update Revit Model
@@ -294,41 +304,33 @@ class Controller(vkt.Controller):
 
     @vkt.PlotlyView(label="Modify / Visualize Sections", duration_guess=20)
     def modify_model_in_viktor(self, params, **kwargs) -> vkt.PlotlyResult:
+
         selection = getattr(getattr(params, "step3", object()), "sections", None)
+        use_staad = getattr(getattr(params, "step3", object()), "boolean", False)
         base_dir = Path(__file__).parent / "downloaded_files"
         ctx = StepErrors()
 
-        data = load_output_json(base_dir, _ctx=ctx)
-        if data is None:
+        # Select file based on boolean
+        if use_staad:
+            json_path = base_dir / "input_staad_updated.json"
+        else:
+            json_path = base_dir / "output.json"
+
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"modify_model: failed to read {json_path.name}: {e}")
             ctx.reraise()
             return vkt.PlotlyResult(figure=model_viz.default_blank_scene())
 
         working = prepare_working_copy(data, _ctx=ctx) or data
-
-        working, modified = apply_section_override(working, selection, _ctx=ctx) or (
-            working,
-            0,
-        )
+        working, modified = apply_section_override(working, selection, _ctx=ctx) or (working, 0)
         if modified:
-            print(
-                f"modify_model: applied section override '{selection}' to {modified} members (in-memory)"
-            )
+            print(f"modify_model: applied section override '{selection}' to {modified} members (in-memory)")
         else:
             print("modify_model: using original sections (no override)")
 
-        written = write_input_json(base_dir, working, _ctx=ctx)
-        if written is not None:
-            print("modify_model: input.json written")
-            # Load input.json after writing and use it for parsing
-            try:
-                input_json = json.loads((base_dir / "input.json").read_text(encoding="utf-8"))
-            except Exception as e:
-                print(f"modify_model: failed to read input.json: {e}")
-                input_json = working
-        else:
-            input_json = working
-
-        parsed = parse_revit_model(input_json, _ctx=ctx)
+        parsed = parse_revit_model(working, _ctx=ctx)
         if parsed is None:
             ctx.reraise()
             return vkt.PlotlyResult(figure=model_viz.default_blank_scene())
@@ -336,13 +338,13 @@ class Controller(vkt.Controller):
 
         try:
             fig = model_viz.plot_3d_model(nodes, lines, members, cross_sections)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print(f"modify_model: plotting failed: {e}")
             fig = model_viz.default_blank_scene()
 
         try:
             ctx.reraise()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print(f"modify_model: completed with collected errors: {e}")
         return vkt.PlotlyResult(figure=fig)
 
@@ -395,19 +397,19 @@ class Controller(vkt.Controller):
         return vkt.DownloadResult(updated_bytes, file_name="updated_revit_model.rvt")
 
     def run_staad_model(self, params, **kwargs) -> vkt.DownloadResult | None:
+
         script_path = Path(__file__).parent / "run_staad_model.py"
         input_json_path = Path(__file__).parent / "downloaded_files" / "output.json"
 
         if not script_path.exists():
             raise FileNotFoundError("Worker script revit_worker.py missing")
-
         if not input_json_path.exists():
             raise FileNotFoundError("output.json missing")
 
         with open(input_json_path, encoding="utf-8") as jsonfile:
             input_data = json.load(jsonfile)
 
-        # Build context for step-decorated parse function
+        # Parse model
         ctx = StepErrors()
         parsed = parse_revit_model(output_json=input_data, _ctx=ctx)
         if parsed is None:
@@ -415,38 +417,47 @@ class Controller(vkt.Controller):
             return None
         nodes, lines, cross_sections, members = parsed
 
-        nodes2, lines2, members2, mother_to_children, child_to_mother = (
-            connect_lines_at_intersections(nodes, lines, members, tol=1e-6)
+        # Build connectivity with augmented child mapping
+        nodes2, lines2, members2, mother_to_children, child_to_mother = connect_lines_at_intersections(
+            nodes, lines, members, tol=1e-4
         )
-        # Decide section name: user selection if not 'Original', else first cross section name or fallback
+
+        # Decide section override to send to worker
         selection = getattr(getattr(params, "step3", object()), "sections", None)
         if selection and selection != "Original Sections":
-            section_name = selection
+            section_override = selection
+        elif selection == "Original Sections":
+            section_override = "Original Sections"
         else:
             try:
                 first_cs = next(iter(cross_sections.values()))
-                section_name = first_cs["name"]
+                section_override = first_cs["name"]
             except Exception:
-                section_name = "IPE400"  # conservative fallback
+                section_override = "IPE400"
 
+        # Package input for worker
         staad_input = json.dumps(
-            [nodes2, lines2, "UB406x178x60", members2, cross_sections, params.step3.allowable_deformation, params.step3.load_mag]
+            [
+                nodes2,
+                lines2,
+                section_override,
+                members2,
+                cross_sections,
+                params.step3.allowable_deformation,
+                params.step3.load_mag,
+            ]
         )
-        # Persist STAAD input locally for inspection/debugging before sending to worker
         dl_dir = Path(__file__).parent / "downloaded_files"
         dl_dir.mkdir(exist_ok=True)
         staad_input_path = dl_dir / "STAAD_inputs.json"
         try:
             staad_input_path.write_text(staad_input, encoding="utf-8")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print(f"Failed to write STAAD_inputs.json locally: {e}")
+
         script = File.from_path(script_path)
-
         model_files = [("STAAD_inputs.json", BytesIO(staad_input.encode("utf-8")))]
-
-        analysis = PythonAnalysis(
-            script=script, files=model_files, output_filenames=["STAAD_output.json"]
-        )  # type: ignore[arg-type]
+        analysis = PythonAnalysis(script=script, files=model_files, output_filenames=["STAAD_output.json"])  # type: ignore[arg-type]
         analysis.execute(timeout=300)
 
         output_file_obj = analysis.get_output_file("STAAD_output.json")
@@ -456,103 +467,155 @@ class Controller(vkt.Controller):
         contents = json.loads(output_file_obj.getvalue())
         updated_member_dict, updated_cs_dict = contents
 
-        # Load the original input.json to update
+        # Load original input.json to update
         base_dir = Path(__file__).parent / "downloaded_files"
-        input_json_path = base_dir / "input.json"
-        if not input_json_path.exists():
+        input_json_path2 = base_dir / "input.json"
+        if not input_json_path2.exists():
             raise FileNotFoundError("input.json not found for update after STAAD run")
-        working_data = json.loads(input_json_path.read_text(encoding="utf-8"))
+        working_data = json.loads(input_json_path2.read_text(encoding="utf-8"))
 
-        # Find mother-to-children mapping from connect_lines_at_intersections
-        # Already available as mother_to_children from above
-
-        # Helper: get last number after 'x' in section name
+        # Helper to parse last number in a section name
         def get_last_number(section_name: str) -> float:
             try:
                 import re
-                # Prefer the last number after 'x' (e.g. UB406x178x60 -> 60)
-                parts = section_name.split('x')
+                parts = section_name.split("x")
                 if len(parts) > 1:
                     try:
                         return float(parts[-1])
                     except Exception:
                         pass
-                # Fallback: find all numbers and return the largest
-                nums = re.findall(r'\d+(?:\.\d+)?', section_name)
+                nums = re.findall(r"\d+(?:\.\d+)?", section_name)
                 if nums:
                     return max(float(n) for n in nums)
                 return -1.0
             except Exception:
                 return -1.0
 
-        import pprint
-        pprint.pp(updated_member_dict)
-        print("**"*20)
-        pprint.pp(updated_cs_dict)
-        # Build lookup for cross section info from updated_cs_dict (keys may be str)
-        cs_info_by_id = {int(k): v for k, v in updated_cs_dict.items()}
-        member_info_by_id = {int(k): v for k, v in updated_member_dict.items()}
-        # Update child members in working_data
-        members_iterable = working_data.get("analytical_members") or working_data.get("members") or []
-        # Build mapping from line_id to member index in working_data
-        lineid_to_member = {int(m.get("id", m.get("line_id", -1))): m for m in members_iterable}
+        # Lookups from worker
+        cs_info_by_id: dict[int, dict] = {}
+        for k, v in updated_cs_dict.items():
+            try:
+                cs_info_by_id[int(k)] = v
+            except Exception:
+                continue
 
-        # Update child members' section info
-        for member_id, member_info in member_info_by_id.items():
-            line_id = member_info["line_id"]
-            cs_id = member_info["cross_section_id"]
+        # Map worker members by line_id for fast access
+        worker_by_line: dict[int, dict] = {}
+        for _, wm in updated_member_dict.items():
+            try:
+                worker_by_line[int(wm["line_id"])] = wm
+            except Exception:
+                continue
+
+        # Members list in the original JSON
+        members_iterable = working_data.get("analytical_members") or working_data.get("members") or []
+
+        # Dual index: by line_id and by id (both are used in user exports)
+        by_line: dict[int, dict] = {}
+        by_id: dict[int, dict] = {}
+        for m in members_iterable:
+            li = m.get("line_id", None)
+            if li is not None:
+                try:
+                    by_line[int(li)] = m
+                except Exception:
+                    pass
+            mid = m.get("id", None)
+            if mid is not None:
+                try:
+                    by_id[int(mid)] = m
+                except Exception:
+                    pass
+
+        def get_member_from_working(line_id: int) -> dict | None:
+            m = by_line.get(line_id)
+            if m is not None:
+                return m
+            # Some files use "id" equal to the analytical line id
+            return by_id.get(line_id)
+
+        # 1) Apply worker sections to all child members present in the working JSON
+        applied_children = 0
+        for _, wm in updated_member_dict.items():
+            try:
+                line_id = int(wm["line_id"])
+                cs_id = int(wm["cross_section_id"])
+            except Exception:
+                continue
             cs_info = cs_info_by_id.get(cs_id)
             if not cs_info:
                 continue
-            # Find the corresponding member in working_data
-            member = lineid_to_member.get(line_id)
-            if member is None:
+            m = get_member_from_working(line_id)
+            if m is None:
                 continue
-            section = member.get("section")
+            section = m.get("section")
             if section is None:
                 section = {}
-                member["section"] = section
+                m["section"] = section
             section["type_name"] = cs_info.get("name", "Section")
             section["type_id"] = cs_info.get("id", cs_id)
             section["family_name"] = cs_info.get("name", "Section")
-            # Optionally update section_properties
-            member["section_properties"] = {k: v for k, v in cs_info.items() if k not in ("id", "name")}
+            m["section_properties"] = {k: v for k, v in cs_info.items() if k not in ("id", "name")}
+            applied_children += 1
 
-        # Now update mother members' section info based on their children
+        # 2) For each mother, pick the governing child DIRECTLY from worker output,
+        #    then write that section into the mother member in working_data.
+        updated_mothers = 0
         for mother_id, child_ids in mother_to_children.items():
-            # Find all child members for this mother
-            child_sections = []
-            for child_id in child_ids:
-                # Find member info for child line
-                child_member = None
-                for m in members_iterable:
-                    if int(m.get("id", m.get("line_id", -1))) == child_id:
-                        child_member = m
-                        break
-                if child_member is None:
+            best_val = None
+            best_cs: dict | None = None
+
+            for cid in child_ids:
+                wm = worker_by_line.get(int(cid))
+                if wm is None:
                     continue
-                section = child_member.get("section", {})
-                section_name = section.get("type_name")
-                if section_name:
-                    child_sections.append((get_last_number(section_name), section))
-            if not child_sections:
+                try:
+                    cs_id = int(wm["cross_section_id"])
+                except Exception:
+                    continue
+                cs = cs_info_by_id.get(cs_id)
+                if not cs:
+                    continue
+                name = str(cs.get("name", ""))
+                val = get_last_number(name)
+                if best_val is None or val > best_val:
+                    best_val = val
+                    best_cs = cs
+
+            if best_cs is None:
                 continue
-            # Pick the section with the largest last number after 'x'
-            _, best_section = max(child_sections, key=lambda x: x[0])
-            # Update mother member
-            mother_member = lineid_to_member.get(mother_id)
+
+            mother_member = get_member_from_working(int(mother_id))
             if mother_member is None:
                 continue
+
+            before_name = mother_member.get("section", {}).get("type_name") if mother_member.get("section") else None
             mother_section = mother_member.get("section")
-            before_name = mother_section.get("type_name") if mother_section else None
             if mother_section is None:
                 mother_section = {}
                 mother_member["section"] = mother_section
-            mother_section.update(best_section)
+
+            mother_section["type_name"] = best_cs.get("name", "Section")
+            mother_section["type_id"] = best_cs.get("id")
+            mother_section["family_name"] = best_cs.get("name", "Section")
+            mother_member["section_properties"] = {k: v for k, v in best_cs.items() if k not in ("id", "name")}
             after_name = mother_section.get("type_name")
             print(f"Mother member {mother_id}: section name before='{before_name}', after='{after_name}'")
+            updated_mothers += 1
 
-        # Write updated input.json
-        input_json_path.write_text(json.dumps(working_data, ensure_ascii=False, indent=2), encoding="utf-8")
-        print("run_staad_model: updated input.json written after STAAD section assignment.")
+        base_dir = Path(__file__).parent / "downloaded_files"
+        input_json_staad = base_dir / "input_staad_updated.json"
+
+        # Write back
+        input_json_staad.write_text(json.dumps(working_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(
+            f"run_staad_model: updated {applied_children} children from worker output, "
+            f"updated {updated_mothers} mothers from governing child. input.json written."
+        )
+
+        # Optional short debug: show any mothers with zero matched children in worker output
+        missing = [mid for mid, kids in mother_to_children.items() if not any(k in worker_by_line for k in kids)]
+        if missing:
+            print(f"[DEBUG] Mothers with no children found in worker output (count={len(missing)}): {missing[:12]}")
+
         return None
