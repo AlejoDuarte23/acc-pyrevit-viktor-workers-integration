@@ -1,6 +1,6 @@
 from math import sqrt
 import openseespy.opensees as ops
-from app.types import (
+from app.app_types import (
     Vec3,
     NodesDict,
     LinesDict,

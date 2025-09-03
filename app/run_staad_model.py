@@ -65,7 +65,7 @@ def get_max_section_displacement(
     openstaad: Annotated[Any, 'OpenSTAADOutput instance.'],
     member_id: Annotated[int, 'Member identifier.'],
     load_case: Annotated[int, 'Load case identifier.'],
-    direction: Annotated[int, 'Global direction (X=1, Y=2, Z=3).']
+    direction: Annotated[str, 'Global direction "X", "Y", "Z"']
 ) -> tuple[float, float]:
     """Backward-compatible helper that calls the OpenSTAAD Output.GetMaxSectionDisplacement API.
 
@@ -78,10 +78,12 @@ def get_max_section_displacement(
     variant_max_disp = make_variant_vt_ref(max_disp, VT_R8)
     variant_max_disp_pos = make_variant_vt_ref(max_disp_pos, VT_R8)
     # Map numeric direction to STAAD axis letter
-    dir_map = {1: "X", 2: "Y", 3: "Z"}
-    axis = dir_map.get(direction, "Y")
-    output.GetMaxSectionDisplacement(member_id, axis, load_case, variant_max_disp, variant_max_disp_pos)
-    return max_disp.value, max_disp_pos.value
+    output.GetMaxSectionDisplacement(member_id, direction, load_case, variant_max_disp, variant_max_disp_pos)
+    print(max_disp.value)
+    print(max_disp_pos.value)
+    # By default staaad return the values in inch
+    max_disp_value_mm = max_disp.value*25.4
+    return max_disp_value_mm, max_disp_pos.value
 
 def saelect_optimal_section():
     # for each iteration get al get_min_max
@@ -119,7 +121,7 @@ def get_members_z_displacements(openstaad: Any, members_dict: MembersDict, case_
             openstaad=openstaad,
             member_id=int(member_id),
             load_case=case_num,
-            direction=3,
+            direction="Y",
         )
         member_dispacement[int(member_id)] = max_disp
     return member_dispacement
@@ -261,7 +263,7 @@ class STAADModel:
                 time.sleep(2)
         return 0
 
-    def get_member_max_displacement(self, member_id: int, load_case: int, direction: int = 3) -> tuple[float, float]:
+    def get_member_max_displacement(self, member_id: int, load_case: int, direction: str) -> tuple[float, float]:
         assert self.openstaad is not None
         return get_max_section_displacement(self.openstaad, member_id, load_case, direction)
 
@@ -269,10 +271,112 @@ class STAADModel:
         assert self.openstaad is not None
         out: member_displacements = {}
         for member_id in self.members:
-            max_disp, _ = self.get_member_max_displacement(int(member_id), load_case, direction=3)
+            max_disp, _ = self.get_member_max_displacement(int(member_id), load_case, direction="Y")
             out[int(member_id)] = max_disp
         self.current_member_displacement = out
         return out
+
+    def _find_section_id_by_name(self, section_name: str) -> int | None:
+        """Return existing section id (int) for given section name or None."""
+        for sid_str, info in self.sections.items():
+            if info.get("name") == section_name:
+                try:
+                    return int(sid_str)
+                except Exception:
+                    continue
+        return None
+
+    def _add_dummy_section(self, section_name: str) -> int:
+        """Add a CrossSectionInfo with dummy numeric attributes and return its new int id."""
+        # choose new id as max existing + 1
+        existing_ids = [int(k) for k in self.sections.keys()] if self.sections else []
+        new_id = max(existing_ids) + 1 if existing_ids else 1
+        info: CrossSectionInfo = {
+            "name": section_name,
+            "id": new_id,
+            "A": 0.0,
+            "Iz": 0.0,
+            "Iy": 0.0,
+            "Jxx": 0.0,
+            "b": 0.2,
+            "h": 0.2,
+        }
+        self.sections[str(new_id)] = info
+        return new_id
+
+    def apply_section_to_all_members(self, section_name: str) -> None:
+        """Set every member's cross_section_id to the id of section_name, adding the section if missing, then assign STAAD property."""
+        assert self.openstaad is not None
+        sid = self._find_section_id_by_name(section_name)
+        if sid is None:
+            sid = self._add_dummy_section(section_name)
+
+        # update members in-memory
+        for mid, mvals in self.members.items():
+            mvals["cross_section_id"] = sid
+
+        # create STAAD property and assign to members
+        staad_property = self.openstaad.Property
+        staad_property._FlagAsMethod("CreateBeamPropertyFromTable")
+        country_code = 3
+        type_spec = 0
+        add_spec_1 = 0.0
+        add_spec_2 = 0.0
+        prop_no = staad_property.CreateBeamPropertyFromTable(country_code, section_name, type_spec, add_spec_1, add_spec_2)
+        staad_property._FlagAsMethod("AssignBeamProperty")
+        for line_id in self.members:
+            staad_property.AssignBeamProperty(int(line_id), prop_no)
+
+    def iterate_sections_and_choose_optimal(self, section_names: list[str]) -> tuple[dict[str, member_displacements], dict[str, MemberInfo]]:
+        """Iterate over candidate section names, run analysis for each, collect displacements, and choose optimal section per member.
+
+        Returns (results_by_section, final_members_dict) where results_by_section maps section_name to member displacement dict,
+        and final_members_dict is the resulting members mapping with chosen cross_section_id per member.
+        """
+        assert self.openstaad is not None
+        results: dict[str, member_displacements] = {}
+
+        # ensure a single load case exists
+        if self.case_num is None:
+            self.create_load_case()
+        case_num = self.case_num
+
+        for sname in section_names:
+            self.apply_section_to_all_members(sname)
+            # run and collect
+            self.run_analysis(silent=True, wait=True)
+            disps = self.get_member_max_displacements(load_case=case_num)
+            results[sname] = disps
+
+        # choose best section per member (less negative = better -> maximize displacement value)
+        final_members: dict[str, MemberInfo] = {}
+        member_ids = sorted({int(k) for k in self.members.keys()})
+        # ensure sections dict contains all tested sections
+        for sname in section_names:
+            if self._find_section_id_by_name(sname) is None:
+                self._add_dummy_section(sname)
+
+        # map section name to its id (int)
+        secname2id: dict[str, int] = {sname: self._find_section_id_by_name(sname) for sname in section_names}
+
+        for mid in member_ids:
+            best_name = None
+            best_val = float('-inf')
+            for sname in section_names:
+                val = results.get(sname, {}).get(mid)
+                if val is None:
+                    continue
+                if val > best_val:
+                    best_val = val
+                    best_name = sname
+            chosen_id = secname2id.get(best_name) if best_name is not None else self.members[str(mid)]["cross_section_id"]
+            final_members[str(mid)] = {
+                "line_id": mid,
+                "cross_section_id": int(chosen_id),
+                "material_name": self.members[str(mid)].get("material_name", "Steel"),
+            }
+
+        return results, final_members
 
 def run_staad():
     # Load lines and nodes from the downloaded_files folder next to this script.
@@ -308,16 +412,39 @@ def run_staad():
     # Hard-coded supports from previous script (kept for compatibility)
     nodes_with_support = [431746, 431742, 431740, 431744]
     model.add_support(nodes_with_support)
-    case_num = model.create_load_case()
-    model.run_analysis(silent=True, wait=True)
+    model.create_load_case()
+    # Candidate cross-section names to try (you can change this list)
+    candidate_sections = [
+        "UB406x178x60",
+        "UB254x102x8",
+    ]
 
-    iteration_list = []
-    member_y_displacement = model.get_member_max_displacements(load_case=case_num)
-    iteration_list.append(member_y_displacement)
+    results_by_section, final_members = model.iterate_sections_and_choose_optimal(candidate_sections)
 
-    json_path = Path.cwd() / "STAAD_output.json"
-    with open(json_path, "w") as jsonfile:
-        json.dump({"iterations": iteration_list}, jsonfile)
+    # Single combined output (legacy name)
+    out_dir = Path.cwd()
+    combined = {
+        "section_displacements": results_by_section,
+        "final_selection": {
+            "members": final_members,
+            "sections": model.sections,
+        },
+    }
+    staad_output = out_dir / "STAAD_output.json"
+    with open(staad_output, "w", encoding="utf-8") as fh:
+        json.dump(combined, fh, indent=2)
+
+    # Also write an updated STAAD inputs file with the same structure as the original inputs
+    # Format: [nodes, lines, section_name, member_dict, cross_section_dict]
+    updated_member_dict = final_members
+    updated_sections = model.sections
+    updated_inputs = [
+        updated_member_dict,
+        updated_sections,
+    ]
+    updated_inputs_path = out_dir / "STAAD_inputs_updated.json"
+    with open(updated_inputs_path, "w", encoding="utf-8") as fh:
+        json.dump(updated_inputs, fh, indent=2)
 
     CoUninitialize()
     return 0

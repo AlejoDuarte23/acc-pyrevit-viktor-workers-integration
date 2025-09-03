@@ -1,7 +1,7 @@
 import plotly.graph_objects as go
 import numpy as np
 
-from app.types import NodesDict, LinesDict, MembersDict, CrossSectionsDict
+from app.app_types import NodesDict, LinesDict, MembersDict, CrossSectionsDict
 
 Vec3 = np.ndarray
 

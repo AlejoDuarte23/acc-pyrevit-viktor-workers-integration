@@ -3,7 +3,7 @@ from __future__ import annotations
 from math import isfinite
 from typing import Annotated
 
-from app.types import (
+from app.app_types import (
     NodesDict,
     LinesDict,
     MembersDict,

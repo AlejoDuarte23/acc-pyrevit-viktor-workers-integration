@@ -3,7 +3,7 @@ matplotlib.use("QtAgg", force=True)
 import matplotlib.pyplot as plt
 from collections import defaultdict
 from math import sqrt
-from app.types import NodesDict, LinesDict, Vec3
+from app.app_types import NodesDict, LinesDict, Vec3
 
 # Vector helpers
 def v_sub(a: Vec3, b: Vec3) -> Vec3:
