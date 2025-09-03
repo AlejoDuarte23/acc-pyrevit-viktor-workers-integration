@@ -223,14 +223,15 @@ class STAADModel:
             cs_info = self.sections[str(member_props["cross_section_id"]) ]
             staad_property.AssignBeamProperty(int(line_id), cs_name2id_lookup[cs_info["name"]])
 
-    def add_support(self, nodes_with_support: list[int] | None = None) -> None:
+    def add_support(self) -> None:
         assert self.openstaad is not None
         support = self.openstaad.Support
         support._FlagAsMethod("CreateSupportFixed")
         support._FlagAsMethod("AssignSupportToNode")
         varnSupportNo = support.CreateSupportFixed()
+        min_z = min([vals["z"] for vals in self.nodes.values()])
         for node_id, vals in self.nodes.items():
-            if vals["z"] == 0:
+            if vals["z"] == min_z:
                 support.AssignSupportToNode(int(node_id), varnSupportNo)
 
     def create_load_case(self) -> int:
@@ -244,6 +245,15 @@ class STAADModel:
         _ = load.AddSelfWeightInXYZ(2, -1.0)
         self.case_num = case_num
         return case_num
+
+    def create_point_loads(self, case_num: int, load_mag: float) -> None:
+        load = self.openstaad.Load
+        load._FlagAsMethod("AddNodalLoad")
+        load._FlagAsMethod("SetLoadActive")
+        ret = load.SetLoadActive(case_num) 
+        for node_id, args in self.nodes.items():
+            if args["z"] != 0:
+                load.AddNodalLoad(int(node_id), 0, -load_mag, 0, 0, 0, 0)
 
     def run_analysis(self, silent: bool = True, wait: bool = True) -> int:
         assert self.openstaad is not None
@@ -310,7 +320,7 @@ def run_staad():
         loaded = json.load(jsonfile)
 
     # Expecting a JSON array: [nodes, lines, section_name, member_dict, cross_section_dict]
-    nodes, lines, section_name, member_dict, cross_section_dict = loaded
+    nodes, lines, section_name, member_dict, cross_section_dict, allowable_disp, load_mag = loaded
 
     # Create STAAD model wrapper and run end-to-end
     model = STAADModel(nodes=nodes, lines=lines, members=member_dict, sections=cross_section_dict)
@@ -319,8 +329,7 @@ def run_staad():
     model.set_material_name("STEEL")
     model.create_nodes_and_beams()
     # Hard-coded supports from previous script (kept for compatibility)
-    nodes_with_support = [431746, 431742, 431740, 431744]
-    model.add_support(nodes_with_support)
+    model.add_support()
     num_case = model.create_load_case()
     candidate_sections = [
         "UB254x102x28",
@@ -330,8 +339,8 @@ def run_staad():
         "UB1016x305x494",
 
     ]
+    model.create_point_loads(case_num=num_case, load_mag=load_mag)
     model.run_analysis()
-    allowable_disp = 100
     member_displacement: dict[int, float] = {}
     for member_id in member_dict:
         max_disp, _ = model.get_member_max_displacement(member_id=member_id, load_case=num_case, direction="Y")
@@ -371,8 +380,10 @@ def run_staad():
         model.members = member_dict
         model.sections = cross_section_dict
         model.create_nodes_and_beams()
-        model.add_support(nodes_with_support)
-        num_case = model.create_load_case()
+        model.add_support()
+        if not num_case:
+            num_case = model.create_load_case()
+            model.create_point_loads(case_num=num_case, load_mag=load_mag)
         model.run_analysis()
         member_displacement = {}
         for member_id in member_dict:

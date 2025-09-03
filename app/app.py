@@ -319,8 +319,16 @@ class Controller(vkt.Controller):
         written = write_input_json(base_dir, working, _ctx=ctx)
         if written is not None:
             print("modify_model: input.json written")
+            # Load input.json after writing and use it for parsing
+            try:
+                input_json = json.loads((base_dir / "input.json").read_text(encoding="utf-8"))
+            except Exception as e:
+                print(f"modify_model: failed to read input.json: {e}")
+                input_json = working
+        else:
+            input_json = working
 
-        parsed = parse_revit_model(working, _ctx=ctx)
+        parsed = parse_revit_model(input_json, _ctx=ctx)
         if parsed is None:
             ctx.reraise()
             return vkt.PlotlyResult(figure=model_viz.default_blank_scene())
@@ -422,7 +430,7 @@ class Controller(vkt.Controller):
                 section_name = "IPE400"  # conservative fallback
 
         staad_input = json.dumps(
-            [nodes2, lines2, "UB406x178x60", members2, cross_sections]
+            [nodes2, lines2, "UB406x178x60", members2, cross_sections, params.step3.allowable_deformation, params.step3.load_mag]
         )
         # Persist STAAD input locally for inspection/debugging before sending to worker
         dl_dir = Path(__file__).parent / "downloaded_files"
@@ -446,5 +454,105 @@ class Controller(vkt.Controller):
             raise RuntimeError("STAAD worker did not produce STAAD_output.json")
 
         contents = json.loads(output_file_obj.getvalue())
-        print(f"{contents=}")
+        updated_member_dict, updated_cs_dict = contents
+
+        # Load the original input.json to update
+        base_dir = Path(__file__).parent / "downloaded_files"
+        input_json_path = base_dir / "input.json"
+        if not input_json_path.exists():
+            raise FileNotFoundError("input.json not found for update after STAAD run")
+        working_data = json.loads(input_json_path.read_text(encoding="utf-8"))
+
+        # Find mother-to-children mapping from connect_lines_at_intersections
+        # Already available as mother_to_children from above
+
+        # Helper: get last number after 'x' in section name
+        def get_last_number(section_name: str) -> float:
+            try:
+                import re
+                # Prefer the last number after 'x' (e.g. UB406x178x60 -> 60)
+                parts = section_name.split('x')
+                if len(parts) > 1:
+                    try:
+                        return float(parts[-1])
+                    except Exception:
+                        pass
+                # Fallback: find all numbers and return the largest
+                nums = re.findall(r'\d+(?:\.\d+)?', section_name)
+                if nums:
+                    return max(float(n) for n in nums)
+                return -1.0
+            except Exception:
+                return -1.0
+
+        import pprint
+        pprint.pp(updated_member_dict)
+        print("**"*20)
+        pprint.pp(updated_cs_dict)
+        # Build lookup for cross section info from updated_cs_dict (keys may be str)
+        cs_info_by_id = {int(k): v for k, v in updated_cs_dict.items()}
+        member_info_by_id = {int(k): v for k, v in updated_member_dict.items()}
+        # Update child members in working_data
+        members_iterable = working_data.get("analytical_members") or working_data.get("members") or []
+        # Build mapping from line_id to member index in working_data
+        lineid_to_member = {int(m.get("id", m.get("line_id", -1))): m for m in members_iterable}
+
+        # Update child members' section info
+        for member_id, member_info in member_info_by_id.items():
+            line_id = member_info["line_id"]
+            cs_id = member_info["cross_section_id"]
+            cs_info = cs_info_by_id.get(cs_id)
+            if not cs_info:
+                continue
+            # Find the corresponding member in working_data
+            member = lineid_to_member.get(line_id)
+            if member is None:
+                continue
+            section = member.get("section")
+            if section is None:
+                section = {}
+                member["section"] = section
+            section["type_name"] = cs_info.get("name", "Section")
+            section["type_id"] = cs_info.get("id", cs_id)
+            section["family_name"] = cs_info.get("name", "Section")
+            # Optionally update section_properties
+            member["section_properties"] = {k: v for k, v in cs_info.items() if k not in ("id", "name")}
+
+        # Now update mother members' section info based on their children
+        for mother_id, child_ids in mother_to_children.items():
+            # Find all child members for this mother
+            child_sections = []
+            for child_id in child_ids:
+                # Find member info for child line
+                child_member = None
+                for m in members_iterable:
+                    if int(m.get("id", m.get("line_id", -1))) == child_id:
+                        child_member = m
+                        break
+                if child_member is None:
+                    continue
+                section = child_member.get("section", {})
+                section_name = section.get("type_name")
+                if section_name:
+                    child_sections.append((get_last_number(section_name), section))
+            if not child_sections:
+                continue
+            # Pick the section with the largest last number after 'x'
+            _, best_section = max(child_sections, key=lambda x: x[0])
+            # Update mother member
+            mother_member = lineid_to_member.get(mother_id)
+            if mother_member is None:
+                continue
+            mother_section = mother_member.get("section")
+            before_name = mother_section.get("type_name") if mother_section else None
+            if mother_section is None:
+                mother_section = {}
+                mother_member["section"] = mother_section
+            mother_section.update(best_section)
+            after_name = mother_section.get("type_name")
+            print(f"Mother member {mother_id}: section name before='{before_name}', after='{after_name}'")
+
+        # Write updated input.json
+        input_json_path.write_text(json.dumps(working_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("run_staad_model: updated input.json written after STAAD section assignment.")
         return None
