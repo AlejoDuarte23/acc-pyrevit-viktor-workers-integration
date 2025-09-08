@@ -103,60 +103,84 @@ def get_viewable_files_names(params, **kwargs):
 
 class Parametrization(vkt.Parametrization):
     step1 = vkt.Step("ACC Model Selection", views=["viewer_page"])
-    step1.title = vkt.Text("# Model Selection - ACC - Viktor Integration")
-    step1.br1 = vkt.LineBreak()
-    step1.hubs = vkt.OptionField("Avaliable Hubs", options=get_hub_list)
+    step1.title = vkt.Image(path="AppTitle.png", align = "left", flex=90)
+
+    step1.description = vkt.Text(
+        textwrap.dedent(
+            """
+            This application allows you to create a closed loop between **ACC**, **VIKTOR**, **REVIT**, and **STAAD.Pro**. You can download a file from ACC, get the analytical model from Revit using VIKTOR's pyRevit worker, and then post-process this data to create a model in STAAD.Pro, again using the VIKTOR worker. With this workflow, you can make iterations in STAAD.Pro and finally modify the model in Revit again with pyRevit.
+
+            ## ACC Integration
+            You can select one of your hubs associated with your ACC account to browse through your Revit files using the option list below!
+            """
+    ))
+    # step1.br1 = vkt.LineBreak()
+    step1.hubs = vkt.OptionField("**Avaliable Hubs**", options=get_hub_list)
+    step1.description1 = vkt.Text(
+        textwrap.dedent(
+            """
+            ## Select a Revit Model
+            Use the option list below to select a Revit model. To properly use this app, the Revit model requires an **analytical model** defined, which will be used for the other sections of the app.
+            """
+    ))
     step1.br2 = vkt.LineBreak()
     step1.viewable_file = vkt.OptionField(
-        "Available Viewables", options=get_viewable_files_names
+        "**Available Viewables**", options=get_viewable_files_names
     )
-    step1.br3 = vkt.LineBreak()
-    step1.select_view = vkt.OptionField("Select View", options=get_view_options)
+    step1.description2 = vkt.Text(
+        textwrap.dedent(
+            """
+            ## Select a Revit View
+            Use the option list below to select a **view** from the **Revit model**. You can select the analytical model view to verify it is properly set up!
+            """
+    ))
+    step1.select_view = vkt.OptionField("**Select View**", options=get_view_options)
     step1.br4 = vkt.LineBreak()
 
     step2 = vkt.Step("Process Revit Model - Viktor Worker", views=["convert_model"])
-    # step2.title = vkt.Text("# Visualize Structural Elements in Plotly")
+    step2.title = vkt.Image(path="AppTitle.png", align = "left", flex=90)
+
+
     step2.description = vkt.Text(
         textwrap.dedent(
             """
-            # Analysis Settings
-            Assign point load in all the nodes for the model. The self weight of the structure will be add it atumatiaclly in STAAAD.PRO. The model will select the optimal section to comply with the allowable deformation asigned to the analysis
+            ## **Parse Revit Model**
+            In this step, the selected **Revit** model from **ACC** will be downloaded and transferred to your local computer. This process is managed by the **pyRevit VIKTOR Worker**. To ensure this step works correctly, make sure **pyRevit** and the required extension are properly set up. The translation process will extract the structural information from your **Revit** model and send it back to your **VIKTOR** app.
+
+            ## **Trigger Translation Workflow**
+            When you update the scene from the right-hand side of the app, the translation workflow will be triggered. The worker will launch a **Revit** instance on your machine and use the extension to extract the structural data. At the end of this process, you will see the **3D model** with **vertical loads** that can be configured in the next step!
             """
         )
     )
-    step2.load_mag = vkt.NumberField("Load Magnitud [kN]", default=1)
-    step2.br55 = vkt.LineBreak()
 
     step3 = vkt.Step(
-        "Modify Model in Viktor and Update Revit Model!",
-        views=["modify_model_in_viktor"],
+        "Run STAAD.PRO Model - Update Revit Model!",
+        views=["convert_model","modify_model_in_viktor"],
     )
-    # step3.text1 = vkt.Text("# Modify Revit Model")
-    # step3.sections = vkt.OptionField("Select Cross Sections", options=["UB406x178x60", "UB254x102x28", "Original Sections"], default="Original Sections")
-    # step3.text2 = vkt.Text(
-    #     textwrap.dedent(
-    #         """
-    #         ## Analysis Settings
-    #         Assign point load in all the nodes for the model. The self weight of the structure will be add it atumatiaclly in STAAAD.PRO. The model will select the optimal section to comply with the allowable deformation asigned to the analysis
-    #         """
-    #     )
-    # )
-    # step3.load_mag = vkt.NumberField("Load Magnitud [kN]", default=1)
-    # step3.br55 = vkt.LineBreak()
-    # step3.allowable_deformation = vkt.NumberField(
-        # "Allowable Deformation [mm]", default=10
-    # )
-    # step3.br66 = vkt.LineBreak()
-    step3.text3 = vkt.Text(
+    step3.title = vkt.Image(path="AppTitle.png", align = "left", flex=90)
+
+    step3.description1 = vkt.Text(
         textwrap.dedent(
             """
-            ## Run STAAD
-            Create a STAAD.Pro model using the loads and run a serviceability assessment to optimize the model to comply with the allowable displacements
+            # **Analysis Settings**
+            ## **Point Loads**
+            Assign a **point load** to all the nodes in the model. The **self-weight** of the structure will be added automatically in **STAAD.Pro**. The model will automatically select the optimal section to comply with the **allowable deformation** you assign for the analysis.
+            """
+        )
+    )
+    step3.load_mag = vkt.NumberField("**Load Magnitud [kN]**", default=5)
+    step3.description2 = vkt.Text(
+        textwrap.dedent(
+            """
+            ## **Optimization**
+            You can define an **allowable deformation limit** (in millimeters) using the option list below. Select the *"Run **STAAD** Workflow"* view tab at the top right of the app to trigger the workflow.
+
+            **How does the workflow work?** The application includes a built-in library of **UB steel sections** that the worker will use to optimize the model. First, the model will run with the cross section defined in **Revit**. If any elements do not comply with the allowable limit, their cross sections will be updated. If the default profile complies, only one iteration will be performed; otherwise, multiple cross sections will be tested, from the smallest to the largest!
             """
         )
     )
     step3.allowable_deformation = vkt.NumberField(
-        "Allowable Deformation [mm]", default=10
+        "**Deformation Limit [mm]**", default=10
     )
     step3.br66 = vkt.LineBreak()
 
@@ -167,7 +191,7 @@ class Parametrization(vkt.Parametrization):
         textwrap.dedent(
             """
             ## Update Revit Model
-            Sync the STAAD.PRO model with revit model, and allow you to download it for revision!
+            After runing the **STAAD.Pro** optimization workflow you can Sync the **STAAD.Pro** model with the **Revit** model, by pressing the action buttom below. The result will be a dowloadable file that you can open it in your revit instance and verify the changes! and download it for revision!
             """
         )
     )
@@ -227,7 +251,7 @@ class Controller(vkt.Controller):
         html = html.replace("VIEW_GUID_PLACEHOLDER", selected_guid or "")
         return vkt.WebResult(html=html)
 
-    @vkt.PlotlyView(label="RVT2VKT!", duration_guess=40)
+    @vkt.PlotlyView(label="Parse Revit Model", duration_guess=40)
     def convert_model(self, params, **kwargs) -> vkt.PlotlyResult:
         # Clean up downloaded_files directory before new run
         dl_dir = Path(__file__).parent / "downloaded_files"
@@ -282,7 +306,7 @@ class Controller(vkt.Controller):
             print(f"convert_model: completed with collected errors: {e}")
         return vkt.PlotlyResult(figure=fig)
 
-    @vkt.PlotlyView(label="Modify / Visualize Sections", duration_guess=20)
+    @vkt.PlotlyView(label="Run STAAD Workflow", duration_guess=20)
     def modify_model_in_viktor(self, params, **kwargs) -> vkt.PlotlyResult:
         base_dir = Path(__file__).parent / "downloaded_files"
         ctx = StepErrors()
@@ -401,7 +425,7 @@ class Controller(vkt.Controller):
                 members2,
                 cross_sections,
                 params.step3.allowable_deformation,
-                params.step2.load_mag,
+                params.step3.load_mag,
             ]
         )
         dl_dir = Path(__file__).parent / "downloaded_files"
@@ -555,7 +579,6 @@ class Controller(vkt.Controller):
 
             mother_section["type_name"] = best_cs.get("name", "Section")
             mother_section["type_id"] = best_cs.get("id")
-            mother_section["family_name"] = best_cs.get("name", "Section")
             mother_member["section_properties"] = {k: v for k, v in best_cs.items() if k not in ("id", "name")}
             after_name = mother_section.get("type_name")
             print(f"Mother member {mother_id}: section name before='{before_name}', after='{after_name}'")

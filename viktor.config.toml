@@ -4,3 +4,4 @@ registered_name = "revit-viktor-structural-worker"
 oauth2_integrations = [
   "aps-integration-viktor"
 ]
+assets_path = "app/assets"
