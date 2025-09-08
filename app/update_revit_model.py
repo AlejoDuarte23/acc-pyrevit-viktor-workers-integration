@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Iterable
 
 from viktor.core import File
-from viktor.external.generic import GenericAnalysis
+
+from viktor.external import PythonAnalysis
 
 from app.steps import step
 
@@ -41,34 +42,6 @@ def prepare_update_worker_script(script_dir: Path) -> File:
         raise FileNotFoundError("Worker script revit_worker_edit.py missing")
     return File.from_path(script_path)
 
-
-def _extract_bytes(obj: object) -> bytes:
-    attempts: Iterable[str] = ("getvalue", "get_bytes", "read", "read_bytes")
-    for name in attempts:
-        func = getattr(obj, name, None)
-        if callable(func):
-            try:  # Try binary flags first
-                try:
-                    data = func(binary=True)  # type: ignore[misc]
-                except TypeError:
-                    try:
-                        data = func(as_bytes=True)  # type: ignore[misc]
-                    except TypeError:
-                        data = func()
-                if isinstance(data, (bytes, bytearray)):
-                    return bytes(data)
-                if isinstance(data, str):
-                    import base64
-                    # Try base64 decode, else treat as utf-8
-                    try:
-                        return base64.b64decode(data, validate=True)
-                    except Exception:  # noqa: BLE001
-                        return data.encode("utf-8", "ignore")
-            except Exception:  # noqa: BLE001
-                continue
-    raise ValueError("Could not obtain bytes from worker output object")
-
-
 @step("run_update_worker")
 def run_update_worker(
     script: File,
@@ -78,26 +51,25 @@ def run_update_worker(
     timeout: int = 600,
 ) -> bytes:
     files_to_stage = [
-        ("revit_worker_edit.py", script),
         (model_name, BytesIO(model_bytes)),
-        ("input.json", BytesIO(input_json_bytes)),
+        ("input.json", BytesIO(input_json_bytes))
     ]
     try:
-        update_analysis = GenericAnalysis(
-            executable_key="revit",
+        analysis = PythonAnalysis(
+            script=script,
             files=files_to_stage,
             output_filenames=["updated_model.rvt"],
         )  # type: ignore[arg-type]
-        update_analysis.execute(timeout=timeout)
-    except Exception as e:  # noqa: BLE001
+        analysis.execute(timeout=timeout)
+    except Exception as e:
         raise RuntimeError(f"Update worker failed: {e}")
 
     try:
-        updated_file = update_analysis.get_output_file("updated_model.rvt")
+        updated_file = analysis.get_output_file("updated_model.rvt")
         if updated_file is None:
             raise RuntimeError("Worker did not produce updated_model.rvt")
-        return _extract_bytes(updated_file)
-    except Exception as e:  # noqa: BLE001
+        return updated_file.getvalue_binary()
+    except Exception as e:
         raise RuntimeError(f"Could not retrieve updated model: {e}")
 
 
