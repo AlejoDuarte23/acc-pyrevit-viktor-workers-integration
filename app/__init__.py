@@ -1,1 +1,1 @@
-from .app import Controller
+from .controller import Controller

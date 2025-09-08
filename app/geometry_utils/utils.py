@@ -102,7 +102,7 @@ def plot_model(nodes: NodesDict, lines: LinesDict) -> None:
 if __name__ == "__main__":
     import json
     from app.steps import StepErrors
-    from app.opensees.connecte_intersetc_lines import connect_lines_at_intersections
+    from app.geometry_utils.connecte_intersetc_lines import connect_lines_at_intersections
     from app.conver_revit_model import parse_revit_model
 
     input_json_path = r"C:\Users\aleja\viktor-apps\revit-viktor-structural-worker\app\downloaded_files\output.json"

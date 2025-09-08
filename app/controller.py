@@ -25,7 +25,7 @@ from app.update_revit_model import (
     run_update_worker,
     persist_updated_model,
 )
-from app.opensees.connecte_intersetc_lines import connect_lines_at_intersections
+from app.geometry_utils.connecte_intersetc_lines import connect_lines_at_intersections
 from pathlib import Path
 from viktor.core import File
 from viktor.external.python import PythonAnalysis
@@ -160,9 +160,9 @@ class Parametrization(vkt.Parametrization):
     )
     step3.br66 = vkt.LineBreak()
 
-    step3.staad_buttom = vkt.ActionButton(
-        "Create STAAD Model", method="run_staad_model"
-    )
+    # step3.staad_buttom = vkt.ActionButton(
+    #     "Create STAAD Model", method="run_staad_model"
+    # )
     step3.text4= vkt.Text(
         textwrap.dedent(
             """
@@ -229,6 +229,16 @@ class Controller(vkt.Controller):
 
     @vkt.PlotlyView(label="RVT2VKT!", duration_guess=40)
     def convert_model(self, params, **kwargs) -> vkt.PlotlyResult:
+        # Clean up downloaded_files directory before new run
+        dl_dir = Path(__file__).parent / "downloaded_files"
+        if dl_dir.exists() and dl_dir.is_dir():
+            for f in dl_dir.iterdir():
+                if f.suffix.lower() in {".rvt", ".json"}:
+                    try:
+                        f.unlink()
+                    except Exception as e:
+                        print(f"Failed to delete {f}: {e}")
+
         # Download the selected file (if not already) and pass it to the worker.
         integration = vkt.external.OAuth2Integration("aps-integration-viktor")
         token = integration.get_access_token()
