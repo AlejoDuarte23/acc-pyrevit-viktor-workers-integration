@@ -36,7 +36,7 @@ class APSView(vkt.WebView):
     pass
 
 
-def get_view_options(params, **kwargs):
+def get_view_options(params, **kwargs) -> list[str] | list[vkt.OptionListElement]:
     """Return OptionListElements for 3D/2D views of the currently selected viewable.
 
     After modification of get_viewable_files_names, params.viewable_file now directly
@@ -50,48 +50,8 @@ def get_view_options(params, **kwargs):
 
     integration = vkt.external.OAuth2Integration("aps-integration-viktor")
     token = integration.get_access_token()
-
-    encoded_urn = base64.urlsafe_b64encode(urn.encode()).decode().rstrip("=")
-    url = f"https://developer.api.autodesk.com/modelderivative/v2/designdata/{encoded_urn}/manifest"
-    headers = {"Authorization": f"Bearer {token}"}
-
-    try:
-        resp = requests.get(url, headers=headers)
-        resp.raise_for_status()
-        manifest = resp.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching manifest: {e}")
-        return ["Error fetching manifest"]
-
-    options = []
-    # Find the main derivative with viewable geometry
-    for derivative in manifest.get("derivatives", []):
-        if derivative.get("outputType") in ["svf", "svf2"]:
-            # Find the parent geometry nodes for both 3D and 2D
-            for geometry_node in derivative.get("children", []):
-                if geometry_node.get("type") == "geometry" and geometry_node.get(
-                    "role"
-                ) in ["3d", "2d"]:
-                    view_name = geometry_node.get("name")
-                    view_guid = None
-                    view_role = geometry_node.get("role")  # '3d' or '2d'
-
-                    # Search its children for the actual node with "type": "view"
-                    for child_node in geometry_node.get("children", []):
-                        if child_node.get("type") == "view":
-                            view_guid = child_node.get("guid")
-                            if child_node.get("name").startswith("Sheet:"):
-                                view_name = child_node.get("name")
-                            break  # Found the correct view node
-
-                    if view_name and view_guid:
-                        # I added this prefix but can be ommited
-                        label_prefix = "[3D]" if view_role == "3d" else "[2D]"
-                        options.append(
-                            vkt.OptionListElement(
-                                label=f"{label_prefix} {view_name}", value=view_guid
-                            )
-                        )
+    
+    options = aps_helpers.list_cad_views(token=token, urn=urn)
 
     if not options:
         return ["No 3D or 2D views found in manifest"]
@@ -155,10 +115,17 @@ class Parametrization(vkt.Parametrization):
     step1.br4 = vkt.LineBreak()
 
     step2 = vkt.Step("Process Revit Model - Viktor Worker", views=["convert_model"])
-    step2.title = vkt.Text("# Visualize Structural Elements in Plotly")
+    # step2.title = vkt.Text("# Visualize Structural Elements in Plotly")
     step2.description = vkt.Text(
-        "Reload the PlotlyView to run the worker and visualize the parsed revit model in the view!"
+        textwrap.dedent(
+            """
+            # Analysis Settings
+            Assign point load in all the nodes for the model. The self weight of the structure will be add it atumatiaclly in STAAAD.PRO. The model will select the optimal section to comply with the allowable deformation asigned to the analysis
+            """
+        )
     )
+    step2.load_mag = vkt.NumberField("Load Magnitud [kN]", default=1)
+    step2.br55 = vkt.LineBreak()
 
     step3 = vkt.Step(
         "Modify Model in Viktor and Update Revit Model!",
@@ -166,20 +133,20 @@ class Parametrization(vkt.Parametrization):
     )
     # step3.text1 = vkt.Text("# Modify Revit Model")
     # step3.sections = vkt.OptionField("Select Cross Sections", options=["UB406x178x60", "UB254x102x28", "Original Sections"], default="Original Sections")
-    step3.text2 = vkt.Text(
-        textwrap.dedent(
-            """
-            ## Analysis Settings
-            Assign point load in all the nodes for the model. The self weight of the structure will be add it atumatiaclly in STAAAD.PRO. The model will select the optimal section to comply with the allowable deformation asigned to the analysis
-            """
-        )
-    )
-    step3.load_mag = vkt.NumberField("Load Magnitud [kN]", default=1)
-    step3.br55 = vkt.LineBreak()
-    step3.allowable_deformation = vkt.NumberField(
-        "Allowable Deformation [mm]", default=10
-    )
-    step3.br66 = vkt.LineBreak()
+    # step3.text2 = vkt.Text(
+    #     textwrap.dedent(
+    #         """
+    #         ## Analysis Settings
+    #         Assign point load in all the nodes for the model. The self weight of the structure will be add it atumatiaclly in STAAAD.PRO. The model will select the optimal section to comply with the allowable deformation asigned to the analysis
+    #         """
+    #     )
+    # )
+    # step3.load_mag = vkt.NumberField("Load Magnitud [kN]", default=1)
+    # step3.br55 = vkt.LineBreak()
+    # step3.allowable_deformation = vkt.NumberField(
+        # "Allowable Deformation [mm]", default=10
+    # )
+    # step3.br66 = vkt.LineBreak()
     step3.text3 = vkt.Text(
         textwrap.dedent(
             """
@@ -188,11 +155,14 @@ class Parametrization(vkt.Parametrization):
             """
         )
     )
+    step3.allowable_deformation = vkt.NumberField(
+        "Allowable Deformation [mm]", default=10
+    )
+    step3.br66 = vkt.LineBreak()
+
     step3.staad_buttom = vkt.ActionButton(
         "Create STAAD Model", method="run_staad_model"
     )
-    step3.br77 = vkt.LineBreak()
-    step3.boolean = vkt.BooleanField("Toggle to Update Result!")
     step3.text4= vkt.Text(
         textwrap.dedent(
             """
@@ -218,36 +188,36 @@ class Controller(vkt.Controller):
         urn = params.step1.viewable_file
         if not urn:
             return vkt.WebResult(html="<p>No URN selected.</p>")
-        try:
-            file_meta = None
-            file_name = None
-            all_files = get_viewable_files_dict(params)
-            for name, meta in all_files.items():
-                if meta.get("urn") == urn:
-                    file_meta = meta
-                    file_name = name
-                    break
-            if file_meta and file_name:
-                project_id = file_meta.get("project_id")
-                item_id = file_meta.get("item_id")
-                if project_id and item_id:
-                    try:
-                        raw_bytes = aps_helpers.get_file_content(
-                            token, project_id, item_id
-                        )
-                        # Persist locally under downloaded_files/<file_name>
-                        safe_name = file_name.replace("/", "_").replace("\\", "_")
-                        output_dir = Path(__file__).parent / "downloaded_files"
-                        output_dir.mkdir(exist_ok=True)
-                        out_path = output_dir / safe_name
-                        out_path.write_bytes(raw_bytes)
-                        print(
-                            f"Saved file '{safe_name}' ({len(raw_bytes)} bytes) to {out_path} (project={project_id}, item={item_id})"
-                        )
-                    except Exception as e:
-                        print(f"Failed to fetch file content: {e}")
-        except Exception as e:
-            print(f"Metadata lookup failed: {e}")
+        # try:
+        #     file_meta = None
+        #     file_name = None
+        #     all_files = get_viewable_files_dict(params)
+        #     for name, meta in all_files.items():
+        #         if meta.get("urn") == urn:
+        #             file_meta = meta
+        #             file_name = name
+        #             break
+        #     if file_meta and file_name:
+        #         project_id = file_meta.get("project_id")
+        #         item_id = file_meta.get("item_id")
+        #         if project_id and item_id:
+        #             try:
+        #                 raw_bytes = aps_helpers.get_file_content(
+        #                     token, project_id, item_id
+        #                 )
+        #                 # Persist locally under downloaded_files/<file_name>
+        #                 safe_name = file_name.replace("/", "_").replace("\\", "_")
+        #                 output_dir = Path(__file__).parent / "downloaded_files"
+        #                 output_dir.mkdir(exist_ok=True)
+        #                 out_path = output_dir / safe_name
+        #                 out_path.write_bytes(raw_bytes)
+        #                 print(
+        #                     f"Saved file '{safe_name}' ({len(raw_bytes)} bytes) to {out_path} (project={project_id}, item={item_id})"
+        #                 )
+        #             except Exception as e:
+        #                 print(f"Failed to fetch file content: {e}")
+        # except Exception as e:
+        #     print(f"Metadata lookup failed: {e}")
 
         encoded_urn = base64.urlsafe_b64encode(urn.encode()).decode().rstrip("=")
 
@@ -304,17 +274,13 @@ class Controller(vkt.Controller):
 
     @vkt.PlotlyView(label="Modify / Visualize Sections", duration_guess=20)
     def modify_model_in_viktor(self, params, **kwargs) -> vkt.PlotlyResult:
-
-        selection = getattr(getattr(params, "step3", object()), "sections", None)
-        use_staad = getattr(getattr(params, "step3", object()), "boolean", False)
         base_dir = Path(__file__).parent / "downloaded_files"
         ctx = StepErrors()
 
+        self.run_staad_model(params, **kwargs)
         # Select file based on boolean
-        if use_staad:
-            json_path = base_dir / "input_staad_updated.json"
-        else:
-            json_path = base_dir / "output.json"
+        # if use_staad:
+        json_path = base_dir / "input_staad_updated.json"
 
         try:
             data = json.loads(json_path.read_text(encoding="utf-8"))
@@ -324,13 +290,8 @@ class Controller(vkt.Controller):
             return vkt.PlotlyResult(figure=model_viz.default_blank_scene())
 
         working = prepare_working_copy(data, _ctx=ctx) or data
-        working, modified = apply_section_override(working, selection, _ctx=ctx) or (working, 0)
-        if modified:
-            print(f"modify_model: applied section override '{selection}' to {modified} members (in-memory)")
-        else:
-            print("modify_model: using original sections (no override)")
-
         parsed = parse_revit_model(working, _ctx=ctx)
+
         if parsed is None:
             ctx.reraise()
             return vkt.PlotlyResult(figure=model_viz.default_blank_scene())
@@ -396,7 +357,7 @@ class Controller(vkt.Controller):
             print(f"update_revit_model: completed with collected errors: {e}")
         return vkt.DownloadResult(updated_bytes, file_name="updated_revit_model.rvt")
 
-    def run_staad_model(self, params, **kwargs) -> vkt.DownloadResult | None:
+    def run_staad_model(self, params, **kwargs) -> None:
 
         script_path = Path(__file__).parent / "run_staad_model.py"
         input_json_path = Path(__file__).parent / "downloaded_files" / "output.json"
@@ -421,30 +382,16 @@ class Controller(vkt.Controller):
         nodes2, lines2, members2, mother_to_children, child_to_mother = connect_lines_at_intersections(
             nodes, lines, members, tol=1e-4
         )
-
-        # Decide section override to send to worker
-        selection = getattr(getattr(params, "step3", object()), "sections", None)
-        if selection and selection != "Original Sections":
-            section_override = selection
-        elif selection == "Original Sections":
-            section_override = "Original Sections"
-        else:
-            try:
-                first_cs = next(iter(cross_sections.values()))
-                section_override = first_cs["name"]
-            except Exception:
-                section_override = "IPE400"
-
         # Package input for worker
         staad_input = json.dumps(
             [
                 nodes2,
                 lines2,
-                section_override,
+                "IPE400",
                 members2,
                 cross_sections,
                 params.step3.allowable_deformation,
-                params.step3.load_mag,
+                params.step2.load_mag,
             ]
         )
         dl_dir = Path(__file__).parent / "downloaded_files"
@@ -468,10 +415,11 @@ class Controller(vkt.Controller):
         updated_member_dict, updated_cs_dict = contents
 
         # Load original input.json to update
+        # output json was the output from the revit 2 vkt conversion.
         base_dir = Path(__file__).parent / "downloaded_files"
-        input_json_path2 = base_dir / "input.json"
+        input_json_path2 = base_dir / "output.json"
         if not input_json_path2.exists():
-            raise FileNotFoundError("input.json not found for update after STAAD run")
+            raise FileNotFoundError("output.json not found for update after STAAD run")
         working_data = json.loads(input_json_path2.read_text(encoding="utf-8"))
 
         # Helper to parse last number in a section name

@@ -405,6 +405,13 @@ def run_staad():
     with open(json_path, "w", encoding="utf-8") as fh:
         json.dump(updated_inputs, fh, indent=2)
 
+    # Shutdown STAAD process if it was launched
+    if hasattr(model, 'staad_process') and model.staad_process is not None:
+        try:
+            model.staad_process.terminate()
+            model.staad_process.wait(timeout=10)
+        except Exception as e:
+            print(f"Failed to terminate STAAD process: {e}")
     openstaad = None
     CoUninitialize()
     return 0

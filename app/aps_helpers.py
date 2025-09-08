@@ -1,6 +1,9 @@
 import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import base64
 import urllib.parse
+import viktor as vkt
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.models.hubs import HubsList
 from app.models.projects import ProjectsList
 from app.models.folders import FoldersList
@@ -330,3 +333,47 @@ def get_file_content(token: str, project_id: str, item_id: str) -> bytes:
         raise ValueError("Could not find storage location for this version")
     file_content = download_file_content(storage_urn, token)
     return file_content 
+
+def list_cad_views(token: str, urn: str) -> list[str] | list[vkt.OptionListElement]:
+        encoded_urn = base64.urlsafe_b64encode(urn.encode()).decode().rstrip("=")
+        url = f"https://developer.api.autodesk.com/modelderivative/v2/designdata/{encoded_urn}/manifest"
+        headers = {"Authorization": f"Bearer {token}"}
+
+        try:
+            resp = requests.get(url, headers=headers)
+            resp.raise_for_status()
+            manifest = resp.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching manifest: {e}")
+            return ["Error fetching manifest"]
+
+        options = []
+        # Find the main derivative with viewable geometry
+        for derivative in manifest.get("derivatives", []):
+            if derivative.get("outputType") in ["svf", "svf2"]:
+                # Find the parent geometry nodes for both 3D and 2D
+                for geometry_node in derivative.get("children", []):
+                    if geometry_node.get("type") == "geometry" and geometry_node.get(
+                        "role"
+                    ) in ["3d", "2d"]:
+                        view_name = geometry_node.get("name")
+                        view_guid = None
+                        view_role = geometry_node.get("role")  # '3d' or '2d'
+
+                        # Search its children for the actual node with "type": "view"
+                        for child_node in geometry_node.get("children", []):
+                            if child_node.get("type") == "view":
+                                view_guid = child_node.get("guid")
+                                if child_node.get("name").startswith("Sheet:"):
+                                    view_name = child_node.get("name")
+                                break  # Found the correct view node
+
+                        if view_name and view_guid:
+                            # I added this prefix but can be ommited
+                            label_prefix = "[3D]" if view_role == "3d" else "[2D]"
+                            options.append(
+                                vkt.OptionListElement(
+                                    label=f"{label_prefix} {view_name}", value=view_guid
+                                )
+                            )
+        return options
