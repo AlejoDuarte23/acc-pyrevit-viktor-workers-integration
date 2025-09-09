@@ -43,9 +43,8 @@ def step(label: str) -> Callable[[Callable[..., Any]], Callable[..., Optional[An
 		return wrapped
 	return decorator
 
-PYREVIT_SCRIPT = (
-	r"C:\Users\aleja\AppData\Roaming\pyRevit-Master\extensions\PullAnalyticalModel.extension\PullAnalyticalModel.tab\Exports.panel\UpdateModelFeatures.pushbutton\script.py"
-)
+PYREVIT_SCRIPT: Path = Path(os.environ["APPDATA"]) / "pyRevit-Master" / "extensions" / "PullAnalyticalModel.extension" / "PullAnalyticalModel.tab" / "Exports.panel" / "UpdateModelFeatures.pushbutton" / "script.py"
+
 
 # Deterministic filename the orchestrator (PythonAnalysis) will fetch.
 UPDATED_OUTPUT_NAME = "updated_model.rvt"

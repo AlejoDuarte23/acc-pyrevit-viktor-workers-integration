@@ -98,19 +98,3 @@ def plot_model(nodes: NodesDict, lines: LinesDict) -> None:
     ax.set_title("Platform Model / Node IDs and Connectivity")
     plt.tight_layout()
     plt.show()
-
-if __name__ == "__main__":
-    import json
-    from app.steps import StepErrors
-    from app.geometry_utils.connecte_intersetc_lines import connect_lines_at_intersections
-    from app.conver_revit_model import parse_revit_model
-
-    input_json_path = r"C:\Users\aleja\viktor-apps\revit-viktor-structural-worker\app\downloaded_files\output.json"
-    with open(input_json_path, encoding="utf-8") as jsonfile:
-        input_data = json.load(jsonfile)
-    ctx = StepErrors()
-    nodes, lines, cross_sections, members = parse_revit_model(output_json=input_data, _ctx=ctx)
-    nodes2, lines2, members2, mother_to_children, child_to_mother = connect_lines_at_intersections(
-        nodes, lines, members, tol=1e-6
-    )
-    plot_model(nodes=nodes2, lines=lines2)

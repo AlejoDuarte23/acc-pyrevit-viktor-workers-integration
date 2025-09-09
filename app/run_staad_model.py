@@ -158,7 +158,7 @@ class STAADModel:
         """Start STAAD.Pro and connect to OpenSTAAD COM object."""
         CoInitialize()
         self.staad_process = subprocess.Popen([self.staad_path])
-        time.sleep(10)
+        time.sleep(15)
         self.openstaad = comtypes.client.GetActiveObject("StaadPro.OpenSTAAD")
         # Ensure a few commonly-used members are flagged as methods so comtypes exposes them callable
         if self.openstaad:

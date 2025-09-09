@@ -7,7 +7,7 @@ from typing import Callable, Optional, Any
 from functools import wraps
 
 
-PYREVIT_SCRIPT = r"C:\Users\aleja\AppData\Roaming\pyRevit-Master\extensions\PullAnalyticalModel.extension\PullAnalyticalModel.tab\Exports.panel\ExportAnalytical.pushbutton\script.py"
+PYREVIT_SCRIPT: Path = Path(os.environ["APPDATA"]) / "pyRevit-Master" / "extensions" / "PullAnalyticalModel.extension" / "PullAnalyticalModel.tab" / "Exports.panel" / "ExportAnalytical.pushbutton" / "script.py"
 OUTPUT_FOLDER = Path(__file__).parent
 
 class StepErrors:
